@@ -38,7 +38,7 @@ import pageindex.utils as utils
 PDF_URL = "https://arxiv.org/pdf/2603.15031"
 
 _EXAMPLES_DIR = Path(__file__).parent
-PDF_PATH = _EXAMPLES_DIR / "documents" / "attention-residuals.pdf"
+PDF_PATH = _EXAMPLES_DIR / "documents" / "King_Bidgoods_in_the_bathtub.pdf"
 WORKSPACE = _EXAMPLES_DIR / "workspace"
 
 AGENT_SYSTEM_PROMPT = """

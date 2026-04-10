@@ -11,17 +11,33 @@ import asyncio
 import pymupdf
 from io import BytesIO
 from dotenv import load_dotenv
+from pathlib import Path
+ROOT_DOTENV = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=ROOT_DOTENV)
 load_dotenv()
 import logging
 import yaml
-from pathlib import Path
 from types import SimpleNamespace as config
 
 # Backward compatibility: support CHATGPT_API_KEY as alias for OPENAI_API_KEY
 if not os.getenv("OPENAI_API_KEY") and os.getenv("CHATGPT_API_KEY"):
     os.environ["OPENAI_API_KEY"] = os.getenv("CHATGPT_API_KEY")
+if not os.getenv("OPENAI_BASE_URL") and os.getenv("OPENAI_API_BASE"):
+    os.environ["OPENAI_BASE_URL"] = os.getenv("OPENAI_API_BASE")
 
 litellm.drop_params = True
+
+
+def _build_llm_kwargs(model: str | None) -> dict:
+    kwargs = {}
+    if model and "/" not in model:
+        kwargs["custom_llm_provider"] = "openai"
+
+    model_lower = (model or "").lower()
+    # Qwen often emits long reasoning traces by default; disable where supported.
+    if "qwen" in model_lower:
+        kwargs["extra_body"] = {"enable_thinking": False}
+    return kwargs
 
 def count_tokens(text, model=None):
     if not text:
@@ -32,6 +48,7 @@ def count_tokens(text, model=None):
 def llm_completion(model, prompt, chat_history=None, return_finish_reason=False):
     if model:
         model = model.removeprefix("litellm/")
+    completion_kwargs = _build_llm_kwargs(model)
     max_retries = 10
     messages = list(chat_history) + [{"role": "user", "content": prompt}] if chat_history else [{"role": "user", "content": prompt}]
     for i in range(max_retries):
@@ -40,6 +57,8 @@ def llm_completion(model, prompt, chat_history=None, return_finish_reason=False)
                 model=model,
                 messages=messages,
                 temperature=0,
+                max_tokens=4096,
+                **completion_kwargs,
             )
             content = response.choices[0].message.content
             if return_finish_reason:
@@ -62,6 +81,7 @@ def llm_completion(model, prompt, chat_history=None, return_finish_reason=False)
 async def llm_acompletion(model, prompt):
     if model:
         model = model.removeprefix("litellm/")
+    completion_kwargs = _build_llm_kwargs(model)
     max_retries = 10
     messages = [{"role": "user", "content": prompt}]
     for i in range(max_retries):
@@ -70,6 +90,8 @@ async def llm_acompletion(model, prompt):
                 model=model,
                 messages=messages,
                 temperature=0,
+                max_tokens=4096,
+                **completion_kwargs,
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -97,34 +119,73 @@ def get_json_content(response):
          
 
 def extract_json(content):
-    try:
-        # First, try to extract JSON enclosed within ```json and ```
-        start_idx = content.find("```json")
-        if start_idx != -1:
-            start_idx += 7  # Adjust index to start after the delimiter
-            end_idx = content.rfind("```")
-            json_content = content[start_idx:end_idx].strip()
-        else:
-            # If no delimiters, assume entire content could be JSON
-            json_content = content.strip()
+    if not content:
+        return {}
 
-        # Clean up common issues that might cause parsing errors
-        json_content = json_content.replace('None', 'null')  # Replace Python None with JSON null
-        json_content = json_content.replace('\n', ' ').replace('\r', ' ')  # Remove newlines
-        json_content = ' '.join(json_content.split())  # Normalize whitespace
-
-        # Attempt to parse and return the JSON object
-        return json.loads(json_content)
-    except json.JSONDecodeError as e:
-        logging.error(f"Failed to extract JSON: {e}")
-        # Try to clean up the content further if initial parsing fails
+    def _try_parse(candidate: str):
+        if not candidate:
+            return None
+        cleaned = candidate.strip()
+        cleaned = cleaned.replace('None', 'null')
         try:
-            # Remove any trailing commas before closing brackets/braces
-            json_content = json_content.replace(',]', ']').replace(',}', '}')
-            return json.loads(json_content)
-        except:
-            logging.error("Failed to parse JSON even after cleanup")
-            return {}
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            cleaned_2 = cleaned.replace(',]', ']').replace(',}', '}')
+            try:
+                return json.loads(cleaned_2)
+            except json.JSONDecodeError:
+                return None
+
+    try:
+        # 1) Fast path: direct JSON
+        parsed = _try_parse(content)
+        if parsed is not None:
+            return parsed
+
+        # 2) Try fenced JSON blocks first
+        for marker in ("```json", "```JSON", "```"):
+            start = 0
+            while True:
+                block_start = content.find(marker, start)
+                if block_start == -1:
+                    break
+                block_start += len(marker)
+                block_end = content.find("```", block_start)
+                if block_end == -1:
+                    block_end = len(content)
+                parsed = _try_parse(content[block_start:block_end])
+                if parsed is not None:
+                    return parsed
+                start = block_end + 3
+
+        # 3) If model prints thinking then JSON tail, take the last balanced block.
+        brace_start = content.rfind("{")
+        brace_end = content.rfind("}")
+        if brace_start != -1 and brace_end != -1 and brace_start < brace_end:
+            parsed = _try_parse(content[brace_start:brace_end + 1])
+            if parsed is not None:
+                return parsed
+
+        bracket_start = content.rfind("[")
+        bracket_end = content.rfind("]")
+        if bracket_start != -1 and bracket_end != -1 and bracket_start < bracket_end:
+            parsed = _try_parse(content[bracket_start:bracket_end + 1])
+            if parsed is not None:
+                return parsed
+
+        # 4) Fallback: scan and decode first valid JSON fragment.
+        decoder = json.JSONDecoder()
+        for idx, char in enumerate(content):
+            if char not in "{[":
+                continue
+            try:
+                obj, _ = decoder.raw_decode(content[idx:].replace('None', 'null'))
+                return obj
+            except Exception:
+                continue
+
+        logging.error("Failed to parse JSON after all extraction attempts")
+        return {}
     except Exception as e:
         logging.error(f"Unexpected error while extracting JSON: {e}")
         return {}
@@ -707,4 +768,3 @@ def print_tree(tree, indent=0):
 def print_wrapped(text, width=100):
     for line in text.splitlines():
         print(textwrap.fill(line, width=width))
-
