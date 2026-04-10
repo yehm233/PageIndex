@@ -15,7 +15,6 @@ from pathlib import Path
 ROOT_DOTENV = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=ROOT_DOTENV)
 load_dotenv()
-import logging
 import yaml
 from types import SimpleNamespace as config
 
@@ -37,6 +36,15 @@ def _build_llm_kwargs(model: str | None) -> dict:
     # Qwen often emits long reasoning traces by default; disable where supported.
     if "qwen" in model_lower:
         kwargs["extra_body"] = {"enable_thinking": False}
+        qwen_api_base = (
+            os.getenv("OPENAI_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+            or os.getenv("QWEN_OPENAI_BASE_URL")
+            or "http://10.21.110.11:8081/v1"
+        )
+        if "openai.com" in qwen_api_base and not os.getenv("QWEN_OPENAI_BASE_URL"):
+            qwen_api_base = "http://10.21.110.11:8081/v1"
+        kwargs["api_base"] = qwen_api_base
     return kwargs
 
 def count_tokens(text, model=None):
