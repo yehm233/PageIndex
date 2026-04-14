@@ -40,6 +40,7 @@ def llm_completion(model, prompt, chat_history=None, return_finish_reason=False)
                 model=model,
                 messages=messages,
                 temperature=0,
+                timeout=1200,
             )
             content = response.choices[0].message.content
             if return_finish_reason:
@@ -70,6 +71,7 @@ async def llm_acompletion(model, prompt):
                 model=model,
                 messages=messages,
                 temperature=0,
+                timeout=1200,
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -102,11 +104,66 @@ def extract_json(content):
         start_idx = content.find("```json")
         if start_idx != -1:
             start_idx += 7  # Adjust index to start after the delimiter
-            end_idx = content.rfind("```")
-            json_content = content[start_idx:end_idx].strip()
+            end_idx = content.find("```", start_idx) # Find the FIRST closing backticks
+            if end_idx != -1:
+                json_content = content[start_idx:end_idx].strip()
+            else:
+                json_content = content[start_idx:].strip()
         else:
-            # If no delimiters, assume entire content could be JSON
+            # No delimiters detected
             json_content = content.strip()
+
+        # Try to find all valid JSON structures (object or array) using brace matching
+        jsons = []
+        start = 0
+        while start < len(json_content):
+            idx = -1
+            for i in range(start, len(json_content)):
+                if json_content[i] in ('{', '['):
+                    idx = i
+                    break
+            if idx == -1:
+                break
+                
+            stack = []
+            in_string = False
+            escape = False
+            valid = False
+            end_idx = -1
+            
+            for i in range(idx, len(json_content)):
+                c = json_content[i]
+                if not in_string:
+                    if c == '"':
+                        in_string = True
+                    elif c in ('{', '['):
+                        stack.append(c)
+                    elif c == '}':
+                        if not stack or stack[-1] != '{': break
+                        stack.pop()
+                    elif c == ']':
+                        if not stack or stack[-1] != '[': break
+                        stack.pop()
+                    
+                    if not stack:
+                        valid = True
+                        end_idx = i
+                        break
+                else:
+                    if escape:
+                        escape = False
+                    elif c == '\\':
+                        escape = True
+                    elif c == '"':
+                        in_string = False
+            if valid:
+                jsons.append(json_content[idx:end_idx+1])
+                start = end_idx + 1
+            else:
+                start = idx + 1
+
+        if jsons:
+            json_content = jsons[-1] # Take the last balanced JSON block found
 
         # Clean up common issues that might cause parsing errors
         json_content = json_content.replace('None', 'null')  # Replace Python None with JSON null
@@ -120,10 +177,10 @@ def extract_json(content):
         # Try to clean up the content further if initial parsing fails
         try:
             # Remove any trailing commas before closing brackets/braces
-            json_content = json_content.replace(',]', ']').replace(',}', '}')
+            json_content = json_content.replace(', ]', ']').replace(', }', '}').replace(',]', ']').replace(',}', '}')
             return json.loads(json_content)
         except:
-            logging.error("Failed to parse JSON even after cleanup")
+            logging.error(f"Failed to parse JSON even after cleanup. Content: {json_content}")
             return {}
     except Exception as e:
         logging.error(f"Unexpected error while extracting JSON: {e}")
