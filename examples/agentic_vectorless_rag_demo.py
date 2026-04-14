@@ -18,12 +18,18 @@ Steps:
 
 Requirements: pip install openai-agents
 """
+import os
 import sys
 import json
 import asyncio
 import concurrent.futures
 from pathlib import Path
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+if "OPENAI_API_BASE" in os.environ and "OPENAI_BASE_URL" not in os.environ:
+    os.environ["OPENAI_BASE_URL"] = os.environ["OPENAI_API_BASE"]
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -35,10 +41,8 @@ from openai.types.responses import ResponseTextDeltaEvent, ResponseReasoningSumm
 from pageindex import PageIndexClient
 import pageindex.utils as utils
 
-PDF_URL = "https://arxiv.org/pdf/2603.15031"
-
 _EXAMPLES_DIR = Path(__file__).parent
-PDF_PATH = _EXAMPLES_DIR / "documents" / "attention-residuals.pdf"
+PDF_PATH = _EXAMPLES_DIR / "documents" / "中国通服黔107号.pdf"
 WORKSPACE = _EXAMPLES_DIR / "workspace"
 
 AGENT_SYSTEM_PROMPT = """
@@ -82,7 +86,7 @@ def query_agent(client: PageIndexClient, doc_id: str, prompt: str, verbose: bool
         name="PageIndex",
         instructions=AGENT_SYSTEM_PROMPT,
         tools=[get_document, get_document_structure, get_page_content],
-        model=client.retrieve_model,
+        model="Qwen3.5-27B",
         # model_settings=ModelSettings(reasoning={"effort": "low", "summary": "auto"}),  # Uncomment to enable reasoning
     )
 
@@ -140,17 +144,9 @@ if __name__ == "__main__":
 
     set_tracing_disabled(True)
 
-    # Download PDF if needed
     if not PDF_PATH.exists():
-        print(f"Downloading {PDF_URL} ...")
-        PDF_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with requests.get(PDF_URL, stream=True, timeout=30) as r:
-            r.raise_for_status()
-            with open(PDF_PATH, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-        print("Download complete.\n")
+        print(f"错误: 找不到文件 {PDF_PATH}")
+        sys.exit(1)
 
     # Setup
     client = PageIndexClient(workspace=WORKSPACE)
@@ -163,8 +159,36 @@ if __name__ == "__main__":
         (did for did, doc in client.documents.items() if doc.get('doc_name') == PDF_PATH.name),
         None,
     )
+    
+    json_path = Path("results") / "中国通服黔107号_structure.json"
+    
     if doc_id:
-        print(f"\nLoaded cached doc_id: {doc_id}")
+        print(f"\nLoaded cached doc_id: {doc_id} from workspace")
+    elif json_path.exists():
+        import PyPDF2
+        import uuid
+        
+        with open(json_path, "r", encoding="utf-8") as f:
+            structure = json.load(f)['structure']
+            
+        pages = []
+        with open(PDF_PATH, 'rb') as f:
+            pdf_reader = PyPDF2.PdfReader(f)
+            for i, page in enumerate(pdf_reader.pages, 1):
+                pages.append({'page': i, 'content': page.extract_text() or ''})
+                
+        doc_id = str(uuid.uuid4())
+        client.documents[doc_id] = {
+            'id': doc_id,
+            'type': 'pdf',
+            'path': str(PDF_PATH.absolute()),
+            'doc_name': PDF_PATH.name,
+            'doc_description': '',
+            'page_count': len(pages),
+            'structure': structure,
+            'pages': pages
+        }
+        print(f"\nLoaded pre-parsed structure from {json_path}. doc_id: {doc_id}")
     else:
         doc_id = client.index(PDF_PATH)
         print(f"\nIndexed. doc_id: {doc_id}")
@@ -183,6 +207,20 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Step 3: Agent Query (auto tool-use)")
     print("=" * 60)
-    question = "Explain Attention Residuals in simple language."
-    print(f"\nQuestion: '{question}'")
-    query_agent(client, doc_id, question, verbose=True)
+    initial_question = "请总结一下这份文档的主要内容。"
+    print(f"\nQuestion: '{initial_question}'")
+    query_agent(client, doc_id, initial_question, verbose=True)
+
+    # Interactive Loop
+    while True:
+        try:
+            question = input("\n请输入你要问的问题 (输入 'quit' 退出): ")
+            if question.lower().strip() in ('quit', 'exit', 'q'):
+                break
+            if not question.strip():
+                continue
+            print(f"\nQuestion: '{question}'")
+            query_agent(client, doc_id, question, verbose=True)
+        except (KeyboardInterrupt, EOFError):
+            print("\nExiting...")
+            break

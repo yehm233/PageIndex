@@ -1,4 +1,5 @@
 import os
+import asyncio
 import json
 import copy
 import math
@@ -8,6 +9,12 @@ from .utils import *
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+async def gather_with_concurrency(n, *tasks, return_exceptions=False):
+    semaphore = asyncio.Semaphore(n)
+    async def sem_task(task):
+        async with semaphore:
+            return await task
+    return await asyncio.gather(*(sem_task(task) for task in tasks), return_exceptions=return_exceptions)
 
 ################### check title in page #########################################################
 async def check_title_appearance(item, page_list, start_index=1, model=None):    
@@ -89,7 +96,7 @@ async def check_title_appearance_in_start_concurrent(structure, page_list, model
             tasks.append(check_title_appearance_in_start(item['title'], page_text, model=model, logger=logger))
             valid_items.append(item)
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    results = await gather_with_concurrency(5, *tasks, return_exceptions=True)
     for item, result in zip(valid_items, results):
         if isinstance(result, Exception):
             if logger:
@@ -842,7 +849,7 @@ async def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, 
         process_and_check_item(item)
         for item in incorrect_results
     ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    results = await gather_with_concurrency(5, *tasks, return_exceptions=True)
     for item, result in zip(incorrect_results, results):
         if isinstance(result, Exception):
             print(f"Processing item {item} generated an exception: {result}")
@@ -937,7 +944,7 @@ async def verify_toc(page_list, list_result, start_index=1, N=None, model=None):
         check_title_appearance(item, page_list, start_index, model)
         for item in indexed_sample_list
     ]
-    results = await asyncio.gather(*tasks)
+    results = await gather_with_concurrency(5, *tasks)
     
     # Process results
     correct_count = 0
@@ -1025,7 +1032,7 @@ async def process_large_node_recursively(node, page_list, opt=None, logger=None)
             process_large_node_recursively(child_node, page_list, opt, logger=logger)
             for child_node in node['nodes']
         ]
-        await asyncio.gather(*tasks)
+        await gather_with_concurrency(5, *tasks)
     
     return node
 
@@ -1061,7 +1068,7 @@ async def tree_parser(page_list, opt, doc=None, logger=None):
         process_large_node_recursively(node, page_list, opt, logger=logger)
         for node in toc_tree
     ]
-    await asyncio.gather(*tasks)
+    await gather_with_concurrency(5, *tasks)
     
     return toc_tree
 
