@@ -1,6 +1,13 @@
 import argparse
 import os
 import json
+from dotenv import load_dotenv
+
+load_dotenv()
+
+os.environ["OPENAI_API_KEY"] = os.getenv("ALIYUN_API_KEY")
+os.environ["OPENAI_BASE_URL"] = os.getenv("ALIYUN_API_BASE")
+
 from pageindex import *
 from pageindex.page_index_md import md_to_tree
 from pageindex.utils import ConfigLoader

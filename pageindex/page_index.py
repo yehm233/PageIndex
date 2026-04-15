@@ -37,11 +37,10 @@ async def check_title_appearance(item, page_list, start_index=1, model=None):
     
     Reply format:
     {{
-        
-        "thinking": <why do you think the section appears or starts in the page_text>
         "answer": "yes or no" (yes if the section appears or starts in the page_text, no otherwise)
     }}
-    Directly return the final JSON structure. Do not output anything else."""
+    Directly return the final JSON structure. Do not output anything else.
+    CRITICAL INSTRUCTION: DO NOT INCLUDE <think> TAGS OR ANY REASONING. OUTPUT JSON DIRECTLY."""
 
     response = await llm_acompletion(model=model, prompt=prompt)
     response = extract_json(response)
@@ -66,10 +65,10 @@ async def check_title_appearance_in_start(title, page_text, model=None, logger=N
     
     reply format:
     {{
-        "thinking": <why do you think the section appears or starts in the page_text>
         "start_begin": "yes or no" (yes if the section starts in the beginning of the page_text, no otherwise)
     }}
-    Directly return the final JSON structure. Do not output anything else."""
+    Directly return the final JSON structure. Do not output anything else.
+    CRITICAL INSTRUCTION: DO NOT INCLUDE <think> TAGS OR ANY REASONING. OUTPUT JSON DIRECTLY."""
 
     response = await llm_acompletion(model=model, prompt=prompt)
     response = extract_json(response)
@@ -116,7 +115,6 @@ def toc_detector_single_page(content, model=None):
 
     return the following JSON format:
     {{
-        "thinking": <why do you think there is a table of content in the given text>
         "toc_detected": "<yes or no>",
     }}
 
@@ -136,10 +134,10 @@ def check_if_toc_extraction_is_complete(content, toc, model=None):
 
     Reply format:
     {{
-        "thinking": <why do you think the table of contents is complete or not>
         "completed": "yes" or "no"
     }}
-    Directly return the final JSON structure. Do not output anything else."""
+    Directly return the final JSON structure. Do not output anything else.
+    CRITICAL INSTRUCTION: DO NOT INCLUDE <think> TAGS OR ANY REASONING. OUTPUT JSON DIRECTLY."""
 
     prompt = prompt + '\n Document:\n' + content + '\n Table of contents:\n' + toc
     response = llm_completion(model=model, prompt=prompt)
@@ -154,10 +152,10 @@ def check_if_toc_transformation_is_complete(content, toc, model=None):
 
     Reply format:
     {{
-        "thinking": <why do you think the cleaned table of contents is complete or not>
         "completed": "yes" or "no"
     }}
-    Directly return the final JSON structure. Do not output anything else."""
+    Directly return the final JSON structure. Do not output anything else.
+    CRITICAL INSTRUCTION: DO NOT INCLUDE <think> TAGS OR ANY REASONING. OUTPUT JSON DIRECTLY."""
 
     prompt = prompt + '\n Raw Table of contents:\n' + content + '\n Cleaned Table of contents:\n' + toc
     response = llm_completion(model=model, prompt=prompt)
@@ -217,10 +215,10 @@ def detect_page_index(toc_content, model=None):
 
     Reply format:
     {{
-        "thinking": <why do you think there are page numbers/indices given within the table of contents>
         "page_index_given_in_toc": "<yes or no>"
     }}
-    Directly return the final JSON structure. Do not output anything else."""
+    Directly return the final JSON structure. Do not output anything else.
+    CRITICAL INSTRUCTION: DO NOT INCLUDE <think> TAGS OR ANY REASONING. OUTPUT JSON DIRECTLY."""
 
     response = llm_completion(model=model, prompt=prompt)
     json_content = extract_json(response)
@@ -268,7 +266,8 @@ def toc_index_extractor(toc, content, model=None):
 
     Only add the physical_index to the sections that are in the provided pages.
     If the section is not in the provided pages, do not add the physical_index to it.
-    Directly return the final JSON structure. Do not output anything else."""
+    Directly return the final JSON structure. Do not output anything else.
+    CRITICAL INSTRUCTION: DO NOT INCLUDE <think> TAGS OR ANY REASONING. OUTPUT JSON DIRECTLY."""
 
     prompt = toc_extractor_prompt + '\nTable of contents:\n' + str(toc) + '\nDocument pages:\n' + content
     response = llm_completion(model=model, prompt=prompt)
@@ -296,7 +295,8 @@ def toc_transformer(toc_content, model=None):
         ],
     }
     You should transform the full table of contents in one go.
-    Directly return the final JSON structure, do not output anything else. """
+    Directly return the final JSON structure, do not output anything else. 
+    CRITICAL INSTRUCTION: DO NOT INCLUDE <think> TAGS OR ANY REASONING. OUTPUT JSON DIRECTLY."""
 
     prompt = init_prompt + '\n Given table of contents\n:' + toc_content
     last_complete, finish_reason = llm_completion(model=model, prompt=prompt, return_finish_reason=True)
@@ -486,7 +486,8 @@ def add_page_number_to_toc(part, structure, model=None):
             ...
         ]    
     The given structure contains the result of the previous part, you need to fill the result of the current part, do not change the previous result.
-    Directly return the final JSON structure. Do not output anything else."""
+    Directly return the final JSON structure. Do not output anything else.
+    CRITICAL INSTRUCTION: DO NOT INCLUDE <think> TAGS OR ANY REASONING. OUTPUT JSON DIRECTLY."""
 
     prompt = fill_prompt_seq + f"\n\nCurrent Partial Document:\n{part}\n\nGiven Structure\n{json.dumps(structure, indent=2)}\n"
     current_json_raw = llm_completion(model=model, prompt=prompt)
@@ -536,14 +537,16 @@ def generate_toc_continue(toc_content, part, model=None):
             ...
         ]    
 
-    Directly return the additional part of the final JSON structure. Do not output anything else."""
+    Directly return the additional part of the final JSON structure. Do not output anything else.
+    CRITICAL INSTRUCTION: DO NOT INCLUDE <think> TAGS OR ANY REASONING. RETURN THE ARRAY IMMEDIATELY."""
 
     prompt = prompt + '\nGiven text\n:' + part + '\nPrevious tree structure\n:' + json.dumps(toc_content, indent=2)
     response, finish_reason = llm_completion(model=model, prompt=prompt, return_finish_reason=True)
-    if finish_reason == 'finished':
+    if finish_reason == 'finished' or finish_reason == 'max_output_reached':
         return extract_json(response)
     else:
-        raise Exception(f'finish reason: {finish_reason}')
+        logging.warning(f"Unexpected finish reason in continue: {finish_reason}")
+        return extract_json(response)
     
 ### add verify completeness
 def generate_toc_init(part, model=None):
@@ -570,15 +573,17 @@ def generate_toc_init(part, model=None):
         ],
 
 
-    Directly return the final JSON structure. Do not output anything else."""
+    Directly return the final JSON structure. Do not output anything else.
+    CRITICAL INSTRUCTION: DO NOT INCLUDE <think> TAGS OR ANY REASONING. RETURN THE ARRAY IMMEDIATELY."""
 
     prompt = prompt + '\nGiven text\n:' + part
     response, finish_reason = llm_completion(model=model, prompt=prompt, return_finish_reason=True)
 
-    if finish_reason == 'finished':
+    if finish_reason == 'finished' or finish_reason == 'max_output_reached':
          return extract_json(response)
     else:
-        raise Exception(f'finish reason: {finish_reason}')
+        logging.warning(f"Unexpected finish reason in init: {finish_reason}")
+        return extract_json(response)
 
 def process_no_toc(page_list, start_index=1, opt=None, model=None, logger=None):
     page_contents=[]
@@ -755,10 +760,10 @@ async def single_toc_item_index_fixer(section_title, content, model=None):
 
     Reply in a JSON format:
     {
-        "thinking": <explain which page, started and closed by <physical_index_X>, contains the start of this section>,
         "physical_index": "<physical_index_X>" (keep the format)
     }
-    Directly return the final JSON structure. Do not output anything else."""
+    Directly return the final JSON structure. Do not output anything else.
+    CRITICAL INSTRUCTION: DO NOT INCLUDE <think> TAGS OR ANY REASONING. OUTPUT JSON DIRECTLY."""
 
     prompt = toc_extractor_prompt + '\nSection Title:\n' + str(section_title) + '\nDocument pages:\n' + content
     response = await llm_acompletion(model=model, prompt=prompt)

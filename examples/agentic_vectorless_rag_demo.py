@@ -17,17 +17,28 @@ Steps:
   3 — Ask a question (agent reasons over the index and auto-calls tools)
 
 Requirements: pip install openai-agents
+
+Usage:
+  python agentic_vectorless_rag_demo.py
+  python agentic_vectorless_rag_demo.py --pdf path/to/document.pdf
+  python agentic_vectorless_rag_demo.py --pdf path/to/doc.pdf --json path/to/structure.json
+  python agentic_vectorless_rag_demo.py -p path/to/doc.pdf -j path/to/structure.json -w path/to/workspace
 """
 import os
 import sys
 import json
 import asyncio
 import concurrent.futures
+import argparse
 from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
 load_dotenv()
+
+os.environ["OPENAI_API_KEY"] = os.getenv("LOCAL_API_KEY")
+os.environ["OPENAI_BASE_URL"] = os.getenv("LOCAL_API_BASE")
+
 if "OPENAI_API_BASE" in os.environ and "OPENAI_BASE_URL" not in os.environ:
     os.environ["OPENAI_BASE_URL"] = os.environ["OPENAI_API_BASE"]
 
@@ -43,6 +54,7 @@ import pageindex.utils as utils
 
 _EXAMPLES_DIR = Path(__file__).parent
 PDF_PATH = _EXAMPLES_DIR / "documents" / "中国通服黔107号.pdf"
+JSON_PATH = _EXAMPLES_DIR / "results" / "中国通服黔107号_structure.json"
 WORKSPACE = _EXAMPLES_DIR / "workspace"
 
 AGENT_SYSTEM_PROMPT = """
@@ -54,6 +66,50 @@ TOOL USE:
 - Before each tool call, output one short sentence explaining the reason.
 Answer based only on tool output. Be concise.
 """
+
+
+def parse_arguments():
+    """Parse command line arguments for PDF path, JSON path, and workspace."""
+    parser = argparse.ArgumentParser(
+        description="Agentic Vectorless RAG with PageIndex",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python agentic_vectorless_rag_demo.py
+  python agentic_vectorless_rag_demo.py --pdf path/to/document.pdf
+  python agentic_vectorless_rag_demo.py -p path/to/doc.pdf -j path/to/structure.json
+  python agentic_vectorless_rag_demo.py -p path/to/doc.pdf -w path/to/workspace
+        """
+    )
+
+    parser.add_argument(
+        "-p", "--pdf",
+        type=str,
+        default=None,
+        help="Path to PDF file (default: documents/中国通服黔107号.pdf)"
+    )
+
+    parser.add_argument(
+        "-j", "--json",
+        type=str,
+        default=None,
+        help="Path to JSON structure file (default: results/中国通服黔107号_structure.json)"
+    )
+
+    parser.add_argument(
+        "-w", "--workspace",
+        type=str,
+        default=None,
+        help="Path to workspace directory (default: examples/workspace)"
+    )
+
+    args = parser.parse_args()
+
+    pdf_path = Path(args.pdf) if args.pdf else PDF_PATH
+    json_path = Path(args.json) if args.json else JSON_PATH
+    workspace = Path(args.workspace) if args.workspace else WORKSPACE
+
+    return pdf_path, json_path, workspace
 
 
 def query_agent(client: PageIndexClient, doc_id: str, prompt: str, verbose: bool = False) -> str:
@@ -86,8 +142,7 @@ def query_agent(client: PageIndexClient, doc_id: str, prompt: str, verbose: bool
         name="PageIndex",
         instructions=AGENT_SYSTEM_PROMPT,
         tools=[get_document, get_document_structure, get_page_content],
-        model="Qwen3.5-27B",
-        # model_settings=ModelSettings(reasoning={"effort": "low", "summary": "auto"}),  # Uncomment to enable reasoning
+        model=os.getenv("LOCAL_MODEL", "qwen3.5-27b"),
     )
 
     async def _run():
@@ -144,45 +199,46 @@ if __name__ == "__main__":
 
     set_tracing_disabled(True)
 
-    if not PDF_PATH.exists():
-        print(f"错误: 找不到文件 {PDF_PATH}")
+    pdf_path, json_path, workspace = parse_arguments()
+
+    if not pdf_path.exists():
+        print(f"错误: 找不到文件 {pdf_path}")
+        print(f"\n使用默认路径: {PDF_PATH}")
+        print("或使用 --pdf 参数指定PDF文件路径")
         sys.exit(1)
 
-    # Setup
-    client = PageIndexClient(workspace=WORKSPACE)
+    client = PageIndexClient(workspace=workspace)
 
     # Step 1: Index PDF and view tree structure
     print("=" * 60)
     print("Step 1: Index PDF and view tree structure")
     print("=" * 60)
     doc_id = next(
-        (did for did, doc in client.documents.items() if doc.get('doc_name') == PDF_PATH.name),
+        (did for did, doc in client.documents.items() if doc.get('doc_name') == pdf_path.name),
         None,
     )
-    
-    json_path = Path("results") / "中国通服黔107号_structure.json"
-    
+
     if doc_id:
         print(f"\nLoaded cached doc_id: {doc_id} from workspace")
     elif json_path.exists():
         import PyPDF2
         import uuid
-        
+
         with open(json_path, "r", encoding="utf-8") as f:
             structure = json.load(f)['structure']
-            
+
         pages = []
-        with open(PDF_PATH, 'rb') as f:
+        with open(pdf_path, 'rb') as f:
             pdf_reader = PyPDF2.PdfReader(f)
             for i, page in enumerate(pdf_reader.pages, 1):
                 pages.append({'page': i, 'content': page.extract_text() or ''})
-                
+
         doc_id = str(uuid.uuid4())
         client.documents[doc_id] = {
             'id': doc_id,
             'type': 'pdf',
-            'path': str(PDF_PATH.absolute()),
-            'doc_name': PDF_PATH.name,
+            'path': str(pdf_path.absolute()),
+            'doc_name': pdf_path.name,
             'doc_description': '',
             'page_count': len(pages),
             'structure': structure,
@@ -190,7 +246,7 @@ if __name__ == "__main__":
         }
         print(f"\nLoaded pre-parsed structure from {json_path}. doc_id: {doc_id}")
     else:
-        doc_id = client.index(PDF_PATH)
+        doc_id = client.index(pdf_path)
         print(f"\nIndexed. doc_id: {doc_id}")
     print("\nTree Structure (top-level sections):")
     structure = json.loads(client.get_document_structure(doc_id))

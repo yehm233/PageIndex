@@ -21,7 +21,10 @@ from types import SimpleNamespace as config
 if not os.getenv("OPENAI_API_KEY") and os.getenv("CHATGPT_API_KEY"):
     os.environ["OPENAI_API_KEY"] = os.getenv("CHATGPT_API_KEY")
 
-litellm.drop_params = True
+litellm.drop_params = False
+litellm.num_retries = 1
+litellm.timeout = 180
+litellm.default_max_tokens = 8000
 
 def count_tokens(text, model=None):
     if not text:
@@ -32,17 +35,26 @@ def count_tokens(text, model=None):
 def llm_completion(model, prompt, chat_history=None, return_finish_reason=False):
     if model:
         model = model.removeprefix("litellm/")
-    max_retries = 10
+    max_retries = 2
     messages = list(chat_history) + [{"role": "user", "content": prompt}] if chat_history else [{"role": "user", "content": prompt}]
+    
+    # Inject system instruction to strictly ban thinking
+    messages.insert(0, {"role": "system", "content": "你是数据提取工具，禁止任何思考、推理、解释、分析。只输出纯净JSON，无其他文字。"})
+    
     for i in range(max_retries):
         try:
             response = litellm.completion(
                 model=model,
-                messages=messages,
-                temperature=0,
-                timeout=1200,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                timeout=120,         # 2 分钟强制超时，不卡死
+                max_tokens=8000,     # 足够输出
+                extra_body={
+                    "enable_thinking": False,   # 绝杀：关闭推理
+                    "thinking_budget": 0        # 绝杀：禁止思考
+                }
             )
-            content = response.choices[0].message.content
+            content = response.choices[0].message.content or ""
             if return_finish_reason:
                 finish_reason = "max_output_reached" if response.choices[0].finish_reason == "length" else "finished"
                 return content, finish_reason
@@ -63,17 +75,22 @@ def llm_completion(model, prompt, chat_history=None, return_finish_reason=False)
 async def llm_acompletion(model, prompt):
     if model:
         model = model.removeprefix("litellm/")
-    max_retries = 10
-    messages = [{"role": "user", "content": prompt}]
+    max_retries = 2
+    messages = [{"role": "system", "content": "你是数据提取工具，禁止任何思考、推理、解释、分析。只输出纯净JSON，无其他文字。"}, {"role": "user", "content": prompt}]
     for i in range(max_retries):
         try:
             response = await litellm.acompletion(
                 model=model,
-                messages=messages,
-                temperature=0,
-                timeout=1200,
-            )
-            return response.choices[0].message.content
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                timeout=120,
+                max_tokens=8000,
+                extra_body={
+                    "enable_thinking": False,
+                    "thinking_budget": 0
+        }
+    )
+            return response.choices[0].message.content or ""
         except Exception as e:
             print('************* Retrying *************')
             logging.error(f"Error: {e}")
@@ -99,6 +116,12 @@ def get_json_content(response):
          
 
 def extract_json(content):
+    if not content:
+        return {}
+    import re
+    # Strip DeepSeek or Qwen reasoning tags explicitly before any processing to prevent parser crash
+    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+    
     try:
         # First, try to extract JSON enclosed within ```json and ```
         start_idx = content.find("```json")
@@ -441,7 +464,7 @@ def add_preface_if_needed(data):
 
 
 
-def get_page_tokens(pdf_path, model=None, pdf_parser="PyPDF2"):
+def get_page_tokens(pdf_path, model=None, pdf_parser="pymupdf4llm"):
     if pdf_parser == "PyPDF2":
         pdf_reader = PyPDF2.PdfReader(pdf_path)
         page_list = []
@@ -460,6 +483,15 @@ def get_page_tokens(pdf_path, model=None, pdf_parser="PyPDF2"):
         page_list = []
         for page in doc:
             page_text = page.get_text()
+            token_length = litellm.token_counter(model=model, text=page_text)
+            page_list.append((page_text, token_length))
+        return page_list
+    elif pdf_parser == "pymupdf4llm":
+        import pymupdf4llm
+        md_pages = pymupdf4llm.to_markdown(pdf_path, page_chunks=True)
+        page_list = []
+        for page in md_pages:
+            page_text = page['text']
             token_length = litellm.token_counter(model=model, text=page_text)
             page_list.append((page_text, token_length))
         return page_list
