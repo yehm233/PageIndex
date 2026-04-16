@@ -5,3 +5,4 @@ __pycache__
 .venv/
 logs/
 examples/mark_pdf/
+results/

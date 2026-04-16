@@ -12,7 +12,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pdf-dir",
         type=Path,
-        default=Path("examples/documents"),
+        default=Path("examples/mark_pdf"),
         help="Directory containing PDF files (default: examples/documents)",
     )
     parser.add_argument(

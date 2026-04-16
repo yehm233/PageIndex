@@ -21,7 +21,7 @@ from types import SimpleNamespace as config
 if not os.getenv("OPENAI_API_KEY") and os.getenv("CHATGPT_API_KEY"):
     os.environ["OPENAI_API_KEY"] = os.getenv("CHATGPT_API_KEY")
 
-litellm.drop_params = False
+litellm.drop_params = True
 litellm.num_retries = 1
 litellm.timeout = 180
 litellm.default_max_tokens = 8000

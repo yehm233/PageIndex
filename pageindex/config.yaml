@@ -8,7 +8,7 @@ model: "qwen-doc-turbo"
 # 检索模型（和上面保持一致即可）
 retrieve_model: "qwen-doc-turbo"
 # 目录检查页数（公文类 2 页刚好）
-toc_check_page_num: 2
+toc_check_page_num: 4
 # 最大页数/节点（公文不要太大，20 最稳）
 max_page_num_each_node: 20
 # 最大 token/节点（qwen-doc 8K 足够）
