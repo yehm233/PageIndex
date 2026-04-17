@@ -278,44 +278,91 @@ def toc_index_extractor(toc, content, model=None):
 
 def toc_transformer(toc_content, model=None):
     print('start toc_transformer')
+    def normalize_toc_response(raw_response):
+        """Parse model output into a TOC list with tolerant fallbacks."""
+        def pick_toc_list(parsed):
+            if isinstance(parsed, list):
+                return parsed
+            if isinstance(parsed, dict):
+                if isinstance(parsed.get('table_of_contents'), list):
+                    return parsed['table_of_contents']
+                for key in ['toc', 'contents', 'sections']:
+                    if isinstance(parsed.get(key), list):
+                        return parsed[key]
+                if len(parsed) == 1:
+                    only_value = next(iter(parsed.values()))
+                    if isinstance(only_value, list):
+                        return only_value
+            return None
+
+        # Repair common malformed JSON issues from model responses.
+        candidate = get_json_content(raw_response) if isinstance(raw_response, str) else ""
+        if candidate:
+            repaired = candidate
+            repaired = repaired.replace('None', 'null')
+            repaired = re.sub(r'([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)', r'\1"\2"\3', repaired)
+            repaired = re.sub(r',\s*([}\]])', r'\1', repaired)
+
+            try:
+                parsed = json.loads(repaired)
+                toc_list = pick_toc_list(parsed)
+                if toc_list is not None:
+                    return toc_list
+            except Exception:
+                pass
+
+            parsed = extract_json(repaired)
+            toc_list = pick_toc_list(parsed)
+            if toc_list is not None:
+                return toc_list
+
+        parsed = extract_json(raw_response)
+        toc_list = pick_toc_list(parsed)
+        if toc_list is not None:
+            return toc_list
+        return None
+
     init_prompt = """
-    You are given a table of contents, You job is to transform the whole table of content into a JSON format included table_of_contents.
+    You are given a table of contents. Your job is to transform the whole table of contents into strict JSON.
 
-    structure is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
+    "structure" is the numeric system representing hierarchy: 1, 1.1, 1.2, etc.
 
-    The response should be in the following JSON format: 
+    The response must follow this JSON format exactly:
     {
-    table_of_contents: [
+      "table_of_contents": [
         {
-            "structure": <structure index, "x.x.x" or None> (string),
-            "title": <title of the section>,
-            "page": <page number or None>,
-        },
+          "structure": "x.x.x or null",
+          "title": "section title",
+          "page": 1
+        }
         ...
-        ],
+      ]
     }
-    You should transform the full table of contents in one go.
-    Directly return the final JSON structure, do not output anything else. 
+    Use null for missing values.
+    All keys must use double quotes.
+    Do not use trailing commas.
+    Return only JSON. Do not output anything else.
     CRITICAL INSTRUCTION: DO NOT INCLUDE <think> TAGS OR ANY REASONING. OUTPUT JSON DIRECTLY."""
 
     prompt = init_prompt + '\n Given table of contents\n:' + toc_content
     last_complete, finish_reason = llm_completion(model=model, prompt=prompt, return_finish_reason=True)
+
+    parsed_toc = normalize_toc_response(last_complete)
+    if parsed_toc is not None and finish_reason in ["finished", "max_output_reached"]:
+        return convert_page_to_int(parsed_toc)
+
     if_complete = check_if_toc_transformation_is_complete(toc_content, last_complete, model)
-    if if_complete == "yes" and finish_reason == "finished":
-        last_complete = extract_json(last_complete)
-        cleaned_response=convert_page_to_int(last_complete['table_of_contents'])
-        return cleaned_response
     
     last_complete = get_json_content(last_complete)
     attempt = 0
     max_attempts = 5
-    while not (if_complete == "yes" and finish_reason == "finished"):
+    while not (if_complete == "yes" and finish_reason in ["finished", "max_output_reached"]):
         attempt += 1
         if attempt > max_attempts:
-            raise Exception('Failed to complete toc transformation after maximum retries')
+            break
         position = last_complete.rfind('}')
         if position != -1:
-            last_complete = last_complete[:position+2]
+            last_complete = last_complete[:position+1]
         prompt = f"""
         Your task is to continue the table of contents json structure, directly output the remaining part of the json structure.
         The response should be in the following JSON format: 
@@ -330,17 +377,37 @@ def toc_transformer(toc_content, model=None):
 
         new_complete, finish_reason = llm_completion(model=model, prompt=prompt, return_finish_reason=True)
 
-        if new_complete.startswith('```json'):
-            new_complete =  get_json_content(new_complete)
-            last_complete = last_complete+new_complete
+        new_complete = get_json_content(new_complete)
+        if new_complete:
+            last_complete = last_complete + new_complete
 
         if_complete = check_if_toc_transformation_is_complete(toc_content, last_complete, model)
-        
 
-    last_complete = extract_json(last_complete)
+    parsed_toc = normalize_toc_response(last_complete)
+    if parsed_toc is not None:
+        return convert_page_to_int(parsed_toc)
 
-    cleaned_response=convert_page_to_int(last_complete['table_of_contents'])
-    return cleaned_response
+    # Final fallback: ask model to repair malformed JSON without re-extracting TOC.
+    repair_prompt = f"""
+    Fix the malformed JSON below and return strict JSON only.
+    Requirements:
+    1) Output must be valid JSON.
+    2) Keep only this top-level format:
+    {{
+      "table_of_contents": [ ... ]
+    }}
+    3) Use double quotes for all keys.
+    4) Use null for missing values.
+    Malformed JSON:
+    {last_complete}
+    """
+    repaired_response = llm_completion(model=model, prompt=repair_prompt)
+    parsed_toc = normalize_toc_response(repaired_response)
+    if parsed_toc is not None:
+        return convert_page_to_int(parsed_toc)
+
+    logging.error("Failed to normalize TOC JSON. Falling back to empty TOC list.")
+    return []
     
 
 
