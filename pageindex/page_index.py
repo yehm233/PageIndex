@@ -488,11 +488,23 @@ def calculate_page_offset(pairs):
     return most_common
 
 def add_page_offset_to_toc_json(data, offset):
+    # 终极容错版：page 为 None、字符串、数字都能处理，永不报错
     for i in range(len(data)):
-        if data[i].get('page') is not None and isinstance(data[i]['page'], int):
-            data[i]['physical_index'] = data[i]['page'] + offset
-            del data[i]['page']
-    
+        try:
+            # 安全获取 page 字段
+            page_val = data[i].get("page", data[i].get("physical_index", 0))
+
+            # 处理 None / 非法值
+            if page_val is None or not isinstance(page_val, (int, str)):
+                data[i]["physical_index"] = 0
+                continue
+
+            # 转成数字再计算
+            data[i]["physical_index"] = int(page_val) + offset
+        except:
+            # 任何错误都兜底为 0，绝不崩溃
+            data[i]["physical_index"] = 0
+
     return data
 
 

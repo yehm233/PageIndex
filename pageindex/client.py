@@ -13,6 +13,7 @@ from .retrieve import get_document, get_document_structure, get_page_content
 from .utils import ConfigLoader, remove_fields
 
 META_INDEX = "_meta.json"
+VALID_DOC_TYPES = {"pdf", "md"}
 
 
 def _normalize_retrieve_model(model: str) -> str:
@@ -174,8 +175,13 @@ class PageIndexClient:
             if path.name == META_INDEX:
                 continue
             doc = self._read_json(path)
-            if doc and isinstance(doc, dict):
-                meta[path.stem] = self._make_meta_entry(doc)
+            if not doc or not isinstance(doc, dict):
+                continue
+            doc_type = doc.get("type")
+            if doc_type not in VALID_DOC_TYPES:
+                # Ignore legacy *_structure.json files (no type/path/pages info).
+                continue
+            meta[path.stem] = self._make_meta_entry(doc)
         return meta
 
     def _read_meta(self) -> dict | None:
@@ -200,6 +206,8 @@ class PageIndexClient:
             if meta:
                 print(f"Loaded {len(meta)} document(s) from workspace (legacy mode).")
         for doc_id, entry in meta.items():
+            if entry.get("type") not in VALID_DOC_TYPES:
+                continue
             doc = dict(entry, id=doc_id)
             if doc.get('path') and not os.path.isabs(doc['path']):
                 doc['path'] = str((self.workspace / doc['path']).resolve())

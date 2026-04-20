@@ -12,8 +12,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pdf-dir",
         type=Path,
-        default=Path("examples/mark_pdf"),
-        help="Directory containing PDF files (default: examples/documents)",
+        default=Path("pdfs"),
+        help="Directory containing PDF files (default: ./pdfs)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("results"),
+        help="Directory containing output structure JSON files (default: ./results)",
     )
     parser.add_argument(
         "--model",
@@ -33,14 +39,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     pdf_dir = args.pdf_dir.expanduser().resolve()
+    output_dir = args.output_dir.expanduser().resolve()
 
     if not pdf_dir.exists() or not pdf_dir.is_dir():
         print(f"❌ PDF 目录不存在: {pdf_dir}")
         return 1
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     pdf_files = sorted(pdf_dir.glob(args.pattern))
 
     print(f"✅ 目录: {pdf_dir}")
+    print(f"✅ 输出目录: {output_dir}")
     print(f"✅ 找到 {len(pdf_files)} 个 PDF 文件")
 
     if not pdf_files:
@@ -57,6 +66,8 @@ def main() -> int:
             "run_pageindex.py",
             "--pdf_path",
             str(pdf_path),
+            "--output-dir",
+            str(output_dir),
             "--model",
             args.model,
         ]

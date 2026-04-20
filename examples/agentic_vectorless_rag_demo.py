@@ -54,7 +54,7 @@ import pageindex.utils as utils
 
 _EXAMPLES_DIR = Path(__file__).parent
 PDF_PATH = _EXAMPLES_DIR / "documents" / "中国通服黔107号.pdf"
-JSON_PATH = _EXAMPLES_DIR / "results" / "中国通服黔107号_structure.json"
+JSON_PATH = _EXAMPLES_DIR / "documents" / "results" / "中国通服黔107号_structure.json"
 WORKSPACE = _EXAMPLES_DIR / "workspace"
 
 AGENT_SYSTEM_PROMPT = """
@@ -93,7 +93,7 @@ Examples:
         "-j", "--json",
         type=str,
         default=None,
-        help="Path to JSON structure file (default: results/中国通服黔107号_structure.json)"
+        help="Path to JSON structure file (default: documents/results/中国通服黔107号_structure.json)"
     )
 
     parser.add_argument(

@@ -4,5 +4,6 @@ __pycache__
 .env*
 .venv/
 logs/
-examples/mark_pdf/
+pdfs/
+workspace/
 results/
